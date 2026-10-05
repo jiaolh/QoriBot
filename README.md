@@ -56,7 +56,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-dependenci
 
 Base URL 不要追加 `/chat/completions` 或 `/v1/messages`。不同平台的 Key 不通用；模型名以服务文档或“查询模型列表”为准。
 
-需要联网搜索时，选择 **DeepSeek 官方搜索**，填写对应平台 Key，保存并启用。搜索由模型按需调用，开关开启不代表每条问题都会搜索。更多配置见 [API 与搜索说明](docs/官方搜索与API.md)。
+需要联网搜索时，选择 **DeepSeek 官方搜索**，填写对应平台 Key，保持 Anthropic Messages 协议和对应基础地址，保存并启用。搜索由模型按需调用，开关开启不代表每条问题都会搜索，实际可用性取决于账户和模型。普通兼容接口不自动支持这项搜索功能。
 
 ### 4. 接入 QQ 并开始聊天
 
@@ -95,25 +95,35 @@ Base URL 不要追加 `/chat/completions` 或 `/v1/messages`。不同平台的 K
 | `/记忆` | 查看自己的资料 |
 | `/忘记` | 清空长期资料 |
 
-### 6. 退出、迁移与检查
+### 6. 退出、迁移与备份
 
 关闭网页不会关闭机器人。点击控制台左下角 **退出程序**，才会关闭服务；电脑休眠会影响连接。
 
-密钥、提示词和记忆保存在本机 `data/`。迁移资料前先退出程序，再复制 `data/`；也可以通过 **存储与环境** 创建备份。模型对话所需的消息和资料会发往你选用的模型服务。
+密钥、提示词和记忆保存在本机 `data/`。在 **存储与环境** 点击“创建数据备份”，可将配置、记忆和用户资料保存到 `backups/`。这些文件含本机密钥和聊天资料，应自行保管。模型对话所需的消息和资料会发往你选用的模型服务。
 
-运行测试：
+迁移到另一台电脑时：
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run.ps1 test
-```
+1. 退出程序，完整复制 `data/`，不要只复制运行中的 `memory.sqlite`。
+2. 在目标电脑按第 2 步安装项目和依赖，再将保存的 `data/` 放入项目目录。
+3. 启动控制台，核对配置和记忆；平台启用 IP 白名单时，更新目标网络的公网出口 IP。
 
-测试使用本地模拟服务与虚拟凭证。启动异常时可运行 `console.cmd` 查看输出，或参考 [排查说明](docs/排查与优化.md)。
+恢复备份时，先退出程序并保存当前 `data/` 的完整副本，再将备份中的 `settings.json`、`memory.sqlite` 和 `users/` 恢复到 `data/`。恢复前将旧 `users/` 和 SQLite 的 `-wal`、`-shm` 文件移到安全副本中，避免与恢复数据混用。
 
-## 维护与发布
+## 常见问题
 
-- [GitHub 上传与源码安装](docs/GitHub发布.md)：首次上传、后续更新及常见报错。
-- [目录说明](docs/目录说明.md)、[环境与迁移](docs/环境与迁移.md)、[群聊设计](docs/全能模式方案.md)。
+| 问题 | 处理 |
+|---|---|
+| 提示找不到 Node 或依赖 | 安装 Node.js 24 或更新版本，重开终端，再执行第 2 步的依赖安装命令 |
+| 双击后打不开控制台 | 运行 `console.cmd` 查看输出，或检查 `data/logs/error.log`；已启动时访问 `http://127.0.0.1:17860` |
+| 模型 401 / 403 | 核对当前配置的 Key、服务平台与账户权限 |
+| 模型 404 | 检查基础地址和模型名称，尝试“查询模型列表” |
+| QQ 无法连接或群里不回复 | 检查 AppID、AppSecret、平台权限、测试成员 / 群和 IP 白名单；轻量群聊需要 @机器人 |
+| 收不到普通群消息 | 确认官方平台已经开通相应接收权限；先用观察模式检查群上下文 |
+| 官方搜索失败 | 确认使用 DeepSeek 官方搜索配置、对应 Key、Anthropic 协议及账户授权 |
+| 修改 QQ 配置被拒绝 | 先停止机器人，再修改凭证或接收方式 |
+| 修改 `.env` 后没有变化 | `.env` 只在首次创建配置时导入；日常配置通过控制台保存 |
+| 运行时出现 EACCES / EPERM | 退出旧服务，再从正常 Windows 环境双击 `start.cmd` 启动 |
 
-`.gitignore` 已排除真实 `.env`、`data/`、`backups/`、`exports/`、运行环境、依赖和缓存。上传源码前检查暂存列表，避免包含个人配置和聊天资料。
+使用 `console.cmd` 时，它运行的也是完整控制台服务，无需再双击 `start.cmd` 或另外启动无界面机器人。
 
 接入能力参考 [腾讯官方 QQ SDK](https://github.com/tencent-connect/qqbot-nodejs)；模型地址和名称参考 [DeepSeek 官方文档](https://api-docs.deepseek.com/)。

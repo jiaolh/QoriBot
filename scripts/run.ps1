@@ -14,7 +14,7 @@ try {
         $taskNode = $taskPortableNode
     } else {
         $taskNodeCommand = Get-Command node -ErrorAction SilentlyContinue
-        if (-not $taskNodeCommand) { throw '请安装 Node.js 24 或更新版本，或按 docs\环境与迁移.md 恢复 runtime。源码版首次运行参见 docs\GitHub发布.md。' }
+        if (-not $taskNodeCommand) { throw '请先安装 Node.js 24 或更新版本。安装与启动步骤见 README.md。' }
         $taskNode = $taskNodeCommand.Source
     }
     $taskVersion = & $taskNode -p 'parseInt(process.versions.node, 10)'

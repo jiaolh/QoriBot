@@ -5,7 +5,7 @@ $taskNode = Join-Path $taskRoot 'runtime\node\node.exe'
 $taskPnpm = Join-Path $taskRoot 'runtime\tools\pnpm\bin\pnpm.cjs'
 if (-not (Test-Path -LiteralPath $taskNode)) {
     $taskNodeCommand = Get-Command node -ErrorAction SilentlyContinue
-    if (-not $taskNodeCommand) { throw '请先安装 Node.js 24 或更新版本，或恢复 runtime\node。参见 docs\GitHub发布.md。' }
+    if (-not $taskNodeCommand) { throw '请先安装 Node.js 24 或更新版本。依赖安装步骤见 README.md。' }
     $taskNode = $taskNodeCommand.Source
 }
 $taskVersion = & $taskNode -p 'parseInt(process.versions.node, 10)'

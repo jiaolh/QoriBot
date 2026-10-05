@@ -13,6 +13,10 @@ exports/
 data/
 *.log
 
+# 本机发布指南、内部方案和开发待办不随源码发布
+/docs/
+/TODO.md
+
 # 测试输出与临时文件
 coverage/
 *.tmp
