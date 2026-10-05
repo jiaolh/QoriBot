@@ -1,0 +1,5 @@
+nodeLinker: hoisted
+storeDir: .cache/pnpm
+cacheDir: .cache/metadata
+ignoreScripts: true
+updateNotifier: false

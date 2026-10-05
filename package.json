@@ -1,0 +1,17 @@
+{
+  "name": "qq-official-ai-bot",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "无需注册 QQ 小号，基于 QQ 官方开放平台的 AI 聊天机器人，支持私聊、群聊、长期记忆与本地可视化控制台。",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "start": "node src/server.js",
+    "bot": "node src/index.js",
+    "check": "node scripts/check-config.js",
+    "models": "node scripts/list-models.js",
+    "chat": "node scripts/chat.js",
+    "test": "node --test"
+  },
+  "dependencies": { "@tencent-connect/qqbot-nodejs": "1.0.4", "@anthropic-ai/sdk": "0.78.0" }
+}

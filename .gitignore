@@ -1,0 +1,38 @@
+# 可重新安装的依赖和本机便携运行环境
+node_modules/
+.pnpm-store/
+.cache/
+runtime/
+
+# 本机配置、聊天资料、备份和导出
+backups/
+exports/
+.env
+.env.*
+!.env.example
+data/
+*.log
+
+# 测试输出与临时文件
+coverage/
+*.tmp
+*.temp
+*.bak
+*~
+
+# 即使被复制到其他目录，也不提交数据库和私钥。
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-wal
+*.db-shm
+*.pem
+*.key
+*.p12
+*.pfx
+
+# 系统生成文件
+Thumbs.db
+Desktop.ini
+.DS_Store
