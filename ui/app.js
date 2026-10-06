@@ -4,7 +4,8 @@ const token = document.querySelector('meta[name="local-token"]').content;
 let settings, status, promptId, providerId, detailId, currentPage = 'overview', memoryPage = 1, memoryTotal = 0;
 let toastTimer, searchTimer, pollTimer, disconnected = false, polling = false;
 let botActionPending=false,statusPending=null,renderedLogs='',renderedStorageAt=0,sessionSignature='';
-const names = { overview: '运行概览', prompts: '提示词工作室', memory: '用户记忆', groups: '群聊模式', settings: 'API 与机器人', storage: '存储与环境' };
+let toolCheckPending = false;
+const names = { overview: '运行概览', prompts: '提示词工作室', memory: '用户记忆', groups: '群聊模式', plugins: '插件管理', settings: 'API 与机器人', storage: '存储与环境' };
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const bytes = value => value < 1024 ? `${value} B` : value < 1048576 ? `${(value / 1024).toFixed(1)} KB` : value < 1073741824 ? `${(value / 1048576).toFixed(1)} MB` : `${(value / 1073741824).toFixed(2)} GB`;
 const short = value => value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
@@ -29,12 +30,15 @@ function confirmAction(title, description, label = '确认') {
 }
 
 function navigate(page) {
-  if (!names[page]) return;
-  currentPage = page; $('page-name').textContent = names[page];
+  if (!names[page] && !window.QoriPluginUI?.pages.has(page)) return;
+  const pluginPage=window.QoriPluginUI?.pages.get(page);
+  currentPage = page; $('page-name').textContent = names[page]||`${names.plugins} / ${pluginPage.title}`;
   document.querySelectorAll('.page').forEach(el => el.classList.toggle('active', el.id === `page-${page}`));
-  document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.page === page));
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.page === (pluginPage?'plugins':page)));
   if (page === 'memory') switchMemoryView(memoryView).catch(error => notify(error.message, true));
   if (page === 'groups') loadGroups(true).catch(error => notify(error.message, true));
+  if(page==='plugins')loadPlugins().catch(error=>notify(error.message,true));
+  window.QoriPluginUI?.pages.get(page)?.load().catch(error=>notify(error.message,true));
   window.scrollTo({ top: 0 });
 }
 document.addEventListener('click', event => {
@@ -102,6 +106,8 @@ function providerEditor(id) {
   $('api-search').checked = provider?.webSearch || false;
   $('activate-provider').disabled = !provider || id === settings.activeProviderId; $('delete-provider').disabled = !provider || settings.providers.length === 1;
   $('models-result').classList.add('hidden'); searchCapability(); renderProviderTabs();
+  $('check-tools').disabled = toolCheckPending || !provider?.apiKeySet;
+  $('tools-result').textContent = '';
 }
 $('provider-tabs').addEventListener('click', event => { const button = event.target.closest('[data-provider]'); if (button) providerEditor(button.dataset.provider); });
 $('new-provider').onclick = () => { providerEditor(crypto.randomUUID()); $('api-name').focus(); };
@@ -127,6 +133,23 @@ $('query-models').onclick = guarded(async () => {
   } finally { button.disabled = false; button.textContent = '查询模型列表'; }
 });
 $('models-result').addEventListener('click', event => { const model = event.target.closest('[data-model]'); if (model) { $('api-model').value = model.dataset.model; notify('模型已填入，请保存 API 配置。'); } });
+$('check-tools').onclick = guarded(async () => {
+  if (toolCheckPending) return;
+  toolCheckPending = true;
+  const button = $('check-tools'), selected = providerId;
+  button.disabled = true; button.textContent = '正在测试…';
+  $('tools-result').textContent = '正在测试已保存的配置…';
+  try {
+    const result = await api('/api/tool-check', 'POST', { providerId: selected });
+    if (providerId === selected) $('tools-result').textContent = result.message;
+  } catch (error) {
+    if (providerId === selected) $('tools-result').textContent = error.message;
+  } finally {
+    toolCheckPending = false;
+    button.textContent = '测试插件调用';
+    button.disabled = !settings.providers.find(item => item.id === providerId)?.apiKeySet;
+  }
+});
 function renderQQ() {
   const qq = settings.qq; $('qq-id').value = qq.appId; $('qq-secret').value = '';
   $('qq-secret-status').textContent = qq.appSecretSet ? '已保存 · 留空保留' : '尚未填写';
@@ -231,14 +254,14 @@ for (const [id, scope, title, description] of [
 ]) $(id).onclick = guarded(async () => { if (!await confirmAction(title, description, '确认清理')) return; await api('/api/storage/cleanup', 'POST', { scope }); await refreshStatus(); notify('清理完成。'); });
 $('refresh-storage').onclick = guarded(async () => { await api('/api/storage/refresh', 'POST'); await refreshStatus(); notify('目录大小已刷新。'); });
 $('quit-app').onclick = guarded(async () => {
-  if (!await confirmAction('退出 QQBot', '停止机器人并关闭本地服务。下次可双击启动入口重新打开。', '退出程序')) return;
+  if (!await confirmAction('退出 QoriBot', '停止机器人并关闭本地服务。下次可双击启动入口重新打开。', '退出程序')) return;
   await api('/api/shutdown', 'POST'); disconnected = true; clearTimeout(pollTimer); $('bot-status').textContent = '服务已退出'; $('bot-toggle').disabled = true; notify('程序已退出，可以关闭这个页面。');
 });
 async function poll() {
   if (disconnected) return;
   if (!document.hidden && !polling) {
     polling = true;
-    try { await refreshStatus(); if (currentPage === 'memory' && !$('memory-dialog').open && !$('profile-dialog').open) await switchMemoryView(memoryView); if(currentPage==='groups') await loadGroups(); }
+    try { await refreshStatus(); if (currentPage === 'memory' && !$('memory-dialog').open && !$('profile-dialog').open) await switchMemoryView(memoryView); if(currentPage==='groups') await loadGroups(); if(currentPage==='plugins')await loadPlugins(); await window.QoriPluginUI?.pages.get(currentPage)?.poll?.(); }
     catch { $('bot-status').textContent = '服务未连接'; }
     finally { polling = false; }
   }

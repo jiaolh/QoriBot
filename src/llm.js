@@ -1,19 +1,11 @@
-export class LLMError extends Error {
-  constructor(message, status = 0) {
-    super(message);
-    this.name = 'LLMError';
-    this.status = status;
-  }
-}
+import { LLMError, statusMessage } from './llm/errors.js';
+import { OpenAIAdapter } from './llm/openai.js';
+import { AnthropicAdapter } from './llm/anthropic.js';
+import { completeWithTools } from './llm-tools.js';
+import { supportsOfficialSearch } from './settings.js';
 
-function statusMessage(status) {
-  if (status === 401) return '大模型 API Key 无效或已过期，请检查当前 API 配置。';
-  if (status === 403) return '当前 Key 无权调用这个模型，请检查模型授权。';
-  if (status === 404) return '大模型地址或模型名称不存在，请检查 Base URL、模型名称，并查询可用模型。';
-  if (status === 429) return '大模型请求过于频繁或额度不足，请稍后再试。';
-  if (status >= 500) return '大模型服务暂时不可用，请稍后再试。';
-  return `大模型请求失败（HTTP ${status}），请检查模型名称和请求参数。`;
-}
+// 保持原有导入接口；错误定义不再与工具循环相互引用。
+export { LLMError, statusMessage } from './llm/errors.js';
 
 export class LLMClient {
   constructor(config, { fetchImpl = fetch, signal, onUsage } = {}) {
@@ -21,6 +13,7 @@ export class LLMClient {
     this.fetchImpl = fetchImpl;
     this.signal = signal;
     this.onUsage = onUsage;
+    this.adapter = config.protocol === 'anthropic' ? new AnthropicAdapter(this) : new OpenAIAdapter(this);
   }
 
   async request(path, body) {
@@ -47,70 +40,27 @@ export class LLMClient {
     }
   }
 
-  async complete(messages) {
+  async complete(messages, tools) {
+    if (tools?.tools?.length) return completeWithTools(this, messages, tools);
+    if (tools?.system) messages = [...messages, { role: 'system', content: tools.system }];
     if (this.config.protocol === 'anthropic') return (await this.completeAnthropic(messages)).text;
-    const body = {
-      model: this.config.model,
-      messages,
-      stream: false,
-      max_tokens: this.config.maxTokens,
-    };
-    if (this.config.temperature !== undefined) body.temperature = this.config.temperature;
-    const data = await this.request('/chat/completions', body);
-    this.onUsage?.({ inputTokens: data.usage?.prompt_tokens || 0, outputTokens: data.usage?.completion_tokens || 0, searches: 0, reported: Number.isFinite(data.usage?.prompt_tokens) && Number.isFinite(data.usage?.completion_tokens) });
-    const content = data?.choices?.[0]?.message?.content;
-    if (typeof content !== 'string' || !content.trim()) {
-      throw new LLMError('大模型没有返回文本回答，请重试或检查模型配置。');
-    }
-    return content.trim();
+    const data = await this.adapter.request(messages);
+    this.onUsage?.(this.adapter.usage(data));
+    return this.adapter.answer(data).text;
   }
 
   async completeAnthropic(messages) {
-    if (this.config.webSearch && !supportsOfficialSearch(this.config)) throw new LLMError('当前接口没有已确认的官方联网搜索支持。');
-    const timeout = AbortSignal.timeout(this.config.timeoutMs);
-    const signal = this.signal ? AbortSignal.any([timeout, this.signal]) : timeout;
-    const client = new Anthropic({ apiKey: this.config.apiKey, baseURL: this.config.baseUrl, maxRetries: 0, timeout: this.config.timeoutMs, fetch: (url, options) => this.fetchImpl(url, { ...options, redirect: 'error' }) });
-    const body = {
-      model: this.config.model, max_tokens: this.config.maxTokens, stream: false,
-      system: messages.filter(item => item.role === 'system').map(item => item.content).join('\n'),
-      messages: messages.filter(item => item.role !== 'system').map(item => ({ role: item.role, content: item.content })),
-    };
-    if (this.config.temperature !== undefined) body.temperature = this.config.temperature;
-    if (this.config.webSearch) body.tools = [{ type: 'web_search_20250305', name: 'web_search', max_uses: 3 }];
-    const blocks = [];
-    let data;
-    try {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        data = await client.messages.create(body, { signal });
-        blocks.push(...data.content);
-        const searches = data.content.filter(block => block.type === 'server_tool_use' && block.name === 'web_search').length;
-        this.onUsage?.({ inputTokens: data.usage?.input_tokens || 0, outputTokens: data.usage?.output_tokens || 0, searches, reported: Number.isFinite(data.usage?.input_tokens) && Number.isFinite(data.usage?.output_tokens) });
-        if (data.stop_reason !== 'pause_turn') break;
-        // 官方服务端搜索暂停时，原样回传工具结果继续，不在本机执行搜索。
-        body.messages.push({ role: 'assistant', content: data.content });
-      }
-      if (data.stop_reason === 'pause_turn') throw new LLMError('官方搜索耗时较长，已达到本次继续次数限制，请缩短问题再试。');
-      const errorBlock = blocks.find(block => block.type === 'web_search_tool_result' && !Array.isArray(block.content) && block.content?.type === 'web_search_tool_result_error');
-      if (errorBlock) throw new LLMError('官方联网搜索暂时失败或达到搜索次数限制，请稍后再试。');
-      const finalBlocks = data.content.filter(block => block.type === 'text');
-      let text = finalBlocks.map(block => block.text).join('\n').trim();
-      if (!text) throw new LLMError('模型没有返回文本回答，请重试。');
-      const sources = [];
-      for (const block of finalBlocks) for (const citation of block.citations || []) {
-        if (citation.url && /^https?:\/\//.test(citation.url) && !sources.some(source => source.url === citation.url)) sources.push({ title: citation.title || '来源', url: citation.url });
-      }
-      if (!sources.length) for (const block of blocks) if (block.type === 'web_search_tool_result' && Array.isArray(block.content)) for (const result of block.content) {
-        if (result.url && /^https?:\/\//.test(result.url) && !sources.some(source => source.url === result.url)) sources.push({ title: result.title || '来源', url: result.url });
-      }
-      if (sources.length) text += '\n\n参考来源：\n' + sources.slice(0, 6).map((source, index) => `${index + 1}. ${source.title}\n${source.url}`).join('\n');
-      return { text, searched: blocks.some(block => block.type === 'server_tool_use' && block.name === 'web_search'), sources };
-    } catch (error) {
-      if (error instanceof LLMError) throw error;
-      if (this.signal?.aborted) throw new LLMError('机器人正在停止，请稍后再试。');
-      if (timeout.aborted || error.name?.includes('Timeout')) throw new LLMError('大模型或官方搜索响应超时，请稍后再试。');
-      if (error.status) throw new LLMError(statusMessage(error.status), error.status);
-      throw new LLMError('无法连接大模型服务，请检查网络和 Base URL。');
+    const history = structuredClone(messages), blocks = [];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const data = await this.adapter.request(history);
+      this.onUsage?.(this.adapter.usage(data));
+      const turn = this.adapter.inspect(data);
+      blocks.push(...turn.blocks);
+      if (!turn.pause) return this.adapter.answer(data, blocks);
+      // 官方搜索暂停时原样续传，搜索仍由上游执行。
+      history.push(turn.assistant);
     }
+    throw new LLMError('官方搜索耗时较长，已达到本次继续次数限制，请缩短问题再试。');
   }
 
   async listModels() {
@@ -124,6 +74,4 @@ export class LLMClient {
     return [...new Set(data.data.map(item => item.id).filter(id => typeof id === 'string'))].sort();
   }
 }
-import Anthropic from '@anthropic-ai/sdk';
-import { supportsOfficialSearch } from './settings.js';
 

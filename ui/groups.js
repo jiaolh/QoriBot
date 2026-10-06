@@ -6,7 +6,8 @@ const groupDefaults = {mode:'light',alias:'',promptId:'',replyProviderId:'',judg
 async function loadGroups(initial = false) {
   const result = await api('/api/groups');
   $('group-stats').textContent = `${result.stats.messages} 条 · ${bytes(result.stats.bytes)} · 今日 ${result.stats.todayTokens.toLocaleString()} tokens`;
-  if (initial) { $('group-max-bytes').value = settings.groupChat.maxBytes / 1048576; $('group-daily-budget').value = settings.groupChat.dailyTokenLimit; }
+  $('group-retention-description').textContent=`逐群选择轻量、观察或全能模式。普通消息原文与群话题摘要保留 ${result.stats.retentionHours} 小时。`;
+  if (initial) { $('group-retention-hours').value=settings.groupChat.messageTtlMs/3600000; $('group-max-bytes').value = settings.groupChat.maxBytes / 1048576; $('group-daily-budget').value = settings.groupChat.dailyTokenLimit; }
   const signature = JSON.stringify(result.rows);
   if(signature !== groupListSignature){ groupListSignature=signature;
     $('group-rows').innerHTML = result.rows.length ? result.rows.map(row=>`<tr><td><strong>${esc(row.policy.alias||short(row.groupId))}</strong><small>${groupModes[row.policy.mode]}</small></td><td>${row.lastFullAt?'已检测到全量消息':'尚未检测到普通消息'}<small>${row.lastSeen?'最近 '+date(row.lastSeen):'等待群消息'}</small></td><td>${row.messages}</td><td>${row.repliesHour} / ${row.judgesHour}</td><td>${row.todayTokens.toLocaleString()}</td><td><button class="text-button" data-group="${esc(row.groupId)}">管理 →</button></td></tr>`).join('') : '<tr><td colspan="6" class="empty-table">机器人收到群消息后，这里会出现对应的群。也可按群标识提前添加。</td></tr>';
@@ -35,7 +36,7 @@ async function refreshGroupDetail() {
 $('refresh-groups').onclick=guarded(()=>loadGroups(true));
 $('group-rows').addEventListener('click',guarded(async event=>{const button=event.target.closest('[data-group]');if(button)await openGroup(button.dataset.group);}));
 $('add-group').onclick=guarded(()=>openGroup('',true));$('close-group').onclick=()=>{selectedGroup='';$('group-detail').classList.add('hidden');};
-$('group-global-form').onsubmit=guarded(async()=>{await saveSettings({groupChat:{messageTtlMs:12*3600000,maxBytes:Number($('group-max-bytes').value)*1048576,dailyTokenLimit:Number($('group-daily-budget').value)}});await loadGroups();notify('群聊资源限制已保存。');});
+$('group-global-form').onsubmit=guarded(async()=>{await saveSettings({groupChat:{messageTtlMs:Number($('group-retention-hours').value)*3600000,maxBytes:Number($('group-max-bytes').value)*1048576,dailyTokenLimit:Number($('group-daily-budget').value)}});await loadGroups();notify('群聊资源限制已保存。');});
 $('group-policy-form').onsubmit=guarded(async()=>{
   const id=$('group-id').value.trim(); if(!id)throw new Error('请填写群标识');
   const policy={mode:$('group-mode').value,alias:$('group-alias').value.trim(),promptId:$('group-prompt').value,replyProviderId:$('group-reply-api').value,judgeProviderId:$('group-judge-api').value,

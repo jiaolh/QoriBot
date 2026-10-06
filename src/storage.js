@@ -36,10 +36,10 @@ export class ProjectStorage {
       for (const [name, path, removable] of [
         ['运行环境', 'runtime', false], ['功能依赖', 'node_modules', false], ['配置与记忆', 'data', false],
         ['安装缓存', '.cache', true], ['备份', 'backups', true], ['程序与界面', 'src', false],
-        ['界面文件', 'ui', false], ['维护脚本', 'scripts', false], ['说明文档', 'docs', false], ['自动测试', 'test', false],
+        ['界面文件', 'ui', false], ['插件', 'plugins', false], ['维护脚本', 'scripts', false], ['自动测试', 'test', false],
         ['记忆导出', 'exports', false],
       ]) {
-        const fixed=['runtime','node_modules','src','ui','scripts','docs','test'].includes(path);
+        const fixed=['runtime','node_modules','src','ui','plugins','scripts','test'].includes(path);
         const stats=fixed && !force && this.fixedStats.has(path) ? this.fixedStats.get(path) : await sizeOf(resolve(this.root,path));
         if(fixed) this.fixedStats.set(path,stats);groups.push({name,path,removable,...stats});
       }
@@ -47,7 +47,7 @@ export class ProjectStorage {
       for (const entry of await readdir(this.root, { withFileTypes: true })) if (entry.isFile()) {
         try { rootBytes += (await stat(resolve(this.root, entry.name))).size; rootFiles++; } catch {}
       }
-      groups.push({ name: '启动与清单', path: '.', removable: false, bytes: rootBytes, files: rootFiles });
+      groups.push({ name: '启动、说明与清单', path: '.', removable: false, bytes: rootBytes, files: rootFiles });
       this.cached = { groups, totalBytes: groups.reduce((sum, group) => sum + group.bytes, 0), measuredAt: Date.now() };
       this.updatedAt = Date.now(); return this.cached;
     })();

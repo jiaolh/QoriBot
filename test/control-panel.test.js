@@ -116,3 +116,47 @@ test('控制台仅本地访问、写请求验证、记忆管理与完整数据�
   assert.equal((await call('/api/storage/cleanup', 'POST', { scope: '.cache' })).status, 200);
   assert.ok(existsSync(resolve(root, 'data/settings.json')));
 });
+
+test('控制台按选中的已保存API测试插件调用，受验证和并发限制，不创建预约或记忆', async t => {
+  let panel;
+  const root = temporary(t, () => panel?.close());
+  panel = await createControlPanel({ root, port: 0 });
+  const providers = panel.settings.public().providers.map(provider => ({ ...provider, apiKey: 'fake-key' }));
+  providers.push({ ...providers[0], id: 'tool-compatible', name: '工具接口测试', protocol: 'openai', webSearch: false });
+  panel.settings.update({ providers });
+  const selected = providers.at(-1), before = JSON.stringify(panel.settings.value);
+  const original = panel.runtime.client.bind(panel.runtime);
+  let requests = 0;
+  panel.runtime.client = (config, ...args) => {
+    assert.equal(config.llm.id, selected.id);
+    assert.equal(config.llm.webSearch, false);
+    const client = original(config, ...args);
+    client.fetchImpl = async (_url, options) => {
+      const body = JSON.parse(options.body); requests++;
+      if (requests === 1) {
+        const code = body.messages.at(-1).content.match(/code=([a-f0-9-]+)/)[1];
+        return Response.json({ choices: [{ message: { tool_calls: [{ id: 'test', type: 'function', function: { name: body.tools[0].function.name, arguments: JSON.stringify({ code }) } }] } }], usage: { prompt_tokens: 20, completion_tokens: 5 } });
+      }
+      return Response.json({ choices: [{ message: { content: JSON.parse(body.messages.at(-1).content).receipt } }], usage: { prompt_tokens: 30, completion_tokens: 10 } });
+    };
+    return client;
+  };
+  const request = () => fetch(panel.origin + '/api/tool-check', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Local-Token': panel.token }, body: JSON.stringify({ providerId: selected.id }) });
+  assert.equal((await fetch(panel.origin + '/api/tool-check', { method: 'POST' })).status, 403);
+  const response = await request(), result = await response.json();
+  assert.equal(response.status, 200, result.error);
+  assert.equal(result.supported, true);
+  assert.equal(requests, 2);
+  assert.equal(panel.runtime.activeTests, 0);
+  assert.equal(panel.runtime.testControllers.size, 0);
+  assert.equal(panel.runtime.counters.inputTokens, 50);
+  assert.equal(panel.runtime.groups.usedToday(), 65);
+  assert.equal(JSON.stringify(panel.settings.value), before);
+  assert.equal(panel.memory.stats().sessions, 0);
+  assert.equal(panel.runtime.plugins.entries.get('reminders').instance.store.list().total, 0);
+  panel.runtime.activeTests = panel.settings.value.limits.maxConcurrent;
+  assert.equal((await request()).status, 400);
+  panel.runtime.activeTests = 0;
+  const html = await (await fetch(panel.origin)).text();
+  assert.ok(html.includes('id="check-tools"') && html.includes('id="tools-result"'));
+});

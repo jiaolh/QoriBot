@@ -1,0 +1,29 @@
+<section class="page" id="page-reminders">
+  <div class="plugin-breadcrumb"><button class="text-button" data-page="plugins">← 插件管理</button><span>/</span><span>预约提醒</span></div>
+  <div class="page-heading"><div><div class="eyebrow">REMINDERS</div><h1>把要记得的事，交给时间。</h1><p>私聊预约发回原私聊，群聊预约发回原群。所有时间按北京时间。</p></div><button class="button primary" id="reminder-new">新建预约 ＋</button></div>
+  <div class="info-box" id="reminder-service-state">到时优先使用最近有效消息回复，没有有效消息时尝试主动发送。送达取决于 QQ 实际权限、频控与接收方设置；失败原因可在记录中查看。</div>
+  <div id="reminder-editor-home">
+  <article class="card hidden" id="reminder-editor">
+    <div class="card-top"><h2 id="reminder-editor-title">新建预约</h2><button class="text-button" id="reminder-editor-close" type="button">收起</button></div>
+    <form id="reminder-form">
+      <div class="limits-grid">
+        <label>发送到<input class="hidden" id="reminder-id"><select id="reminder-target" required aria-label="预约发送目标"></select></label>
+        <label>时间类型<select id="reminder-time-type"><option value="absolute">绝对时间 · 指定日期或钟点</option><option value="relative">相对时间 · 从保存时开始计算</option></select></label>
+        <label>首次提醒时间<input id="reminder-when" maxlength="100" required placeholder="明天08:00 或 2026-10-07 08:00"></label>
+        <label>重复规则<select id="reminder-repeat"><option value="once">仅一次</option><option value="daily">每天</option><option value="workdays">工作日 · 周一至周五</option><option value="weekly">每周 · 首次提醒的星期</option><option value="monthly">每月 · 首次提醒的日期</option><option value="interval">固定间隔</option></select></label>
+        <label class="hidden" id="reminder-interval-field">重复间隔<input id="reminder-interval" maxlength="100" placeholder="30分钟 或 2小时"></label>
+        <label>结束时间（可留空）<input id="reminder-end" maxlength="100" placeholder="2026-10-31 20:00"></label>
+      </div>
+      <label>提醒内容<textarea id="reminder-content" rows="3" maxlength="500" required placeholder="例如：喝水、开会、出发。到时会发送这里的文字。"></textarea></label>
+      <div class="form-bottom"><small id="reminder-time-help">只填钟点表示下一次该钟点；每月不存在的日期会跳过，不挪到月末。</small><button class="button primary" type="submit" id="reminder-save">保存预约</button></div>
+    </form>
+  </article>
+  </div>
+  <article class="card memory-card">
+    <div class="table-toolbar"><div><h2>已保存的预约</h2><p class="muted" id="reminder-count">加载中…</p></div><div class="reminder-filters"><label class="sr-only" for="reminder-state">预约状态</label><select id="reminder-state"><option value="">全部状态</option><option value="active">启用</option><option value="paused">暂停</option><option value="failed">发送失败</option><option value="uncertain">结果未知</option><option value="completed">已完成</option><option value="cancelled">已停止（旧记录）</option><option value="missed">已错过</option></select><input class="search-box" id="reminder-search" aria-label="搜索预约" maxlength="100" placeholder="搜索内容、ID 或目标"></div></div>
+    <div class="table-wrap"><table><thead><tr><th>内容 / ID</th><th>发送目标</th><th>下次提醒</th><th>重复 / 状态</th><th>操作</th></tr></thead><tbody id="reminder-rows"></tbody></table></div>
+    <div class="pagination"><button class="button secondary small" id="reminder-prev">上一页</button><span id="reminder-page">1</span><button class="button secondary small" id="reminder-next">下一页</button></div>
+  </article>
+  <article class="card"><h2>直接对 Bot 说</h2><p class="muted">私聊直接说，群聊先 @Bot。AI 会理解时间与事项，按需要调用预约插件；时间不明确时会追问。首次建议用“十秒后提醒我喝水”测试。</p><div class="reminder-examples"><code>十秒后提醒我喝水</code><code>十分钟后提醒我喝水</code><code>明天早上八点提醒我开会</code><code>每天八点叫我吃早饭</code><code>每周一早上八点提醒我开周会</code><code>每个月1号提醒我交费</code><code>每隔半小时叫我休息一下</code><code>我有哪些提醒？</code><code>把喝水的提醒推迟半小时</code><code>删除我的周会提醒</code></div><p class="muted">离线不超过24小时仅尝试补最近一次，重复预约跳过旧周期。发送失败停止重试，核对原因后可手动恢复；结果未知时先核对接收方，避免重复提醒。删除会移除预约及发送记录，暂时停用请使用暂停。</p></article>
+</section>
+<dialog id="reminder-history-dialog" class="memory-dialog"><div class="card-top"><h2>预约发送记录</h2><button class="icon-button" id="reminder-history-close" aria-label="关闭预约记录">×</button></div><p id="reminder-history-meta"></p><div id="reminder-history-body" class="memory-messages"></div></dialog>

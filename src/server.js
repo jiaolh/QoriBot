@@ -8,7 +8,6 @@ import { SettingsStore, SEARCH_DOCS } from './settings.js';
 import { MemoryDatabase } from './memory-db.js';
 import { BotRuntime } from './runtime.js';
 import { ProjectStorage, contained } from './storage.js';
-import { LLMClient } from './llm.js';
 import { LOCAL_USER } from './profile-memory.js';
 
 async function jsonBody(req) {
@@ -27,15 +26,19 @@ export async function createControlPanel({ root = projectRoot, port = 17860 } = 
   const profiles = runtime.profiles;
   const storage = new ProjectStorage(root);
   const token = randomBytes(32).toString('hex');
+  const pluginUi=runtime.plugins.assets();
   const assets = new Map([
     ['/', { type: 'text/html; charset=utf-8', content: readFileSync(resolve(projectRoot, 'ui/index.html'), 'utf8').replace('__LOCAL_TOKEN__', token) }],
     ['/style.css', { type: 'text/css; charset=utf-8', content: readFileSync(resolve(projectRoot, 'ui/style.css')) }],
     ['/app.js', { type: 'text/javascript; charset=utf-8', content: readFileSync(resolve(projectRoot, 'ui/app.js')) }],
     ['/profiles.js', { type: 'text/javascript; charset=utf-8', content: readFileSync(resolve(projectRoot,'ui/profiles.js')) }],
     ['/groups.js', { type: 'text/javascript; charset=utf-8', content: readFileSync(resolve(projectRoot,'ui/groups.js')) }],
+    ['/plugins.js', { type: 'text/javascript; charset=utf-8', content: readFileSync(resolve(projectRoot,'ui/plugins.js')) }],
     ['/favicon.svg', { type: 'image/svg+xml', content: readFileSync(resolve(projectRoot, 'ui/favicon.svg')) }],
   ]);
-  for(const path of ['/app.js','/profiles.js','/groups.js','/style.css','/favicon.svg']) assets.get('/').content=assets.get('/').content.replace(`"${path}"`,`"${path}?v=${createHash('sha256').update(assets.get(path).content).digest('hex').slice(0,12)}"`);
+  for(const asset of pluginUi.assets)assets.set(...asset);
+  assets.get('/').content=assets.get('/').content.replace('__PLUGIN_NAV__',pluginUi.navigation).replace('__PLUGIN_PAGES__',pluginUi.pages).replace('__PLUGIN_SCRIPTS__',pluginUi.scripts);
+  for(const path of [...assets.keys()].filter(path=>path!=='/')) assets.get('/').content=assets.get('/').content.replace(`"${path}"`,`"${path}?v=${createHash('sha256').update(assets.get(path).content).digest('hex').slice(0,12)}"`);
   const startedAt = Date.now(); let cpu = process.cpuUsage(), cpuAt = performance.now(), cpuPercent = 0;
   const assertIdle = () => { if (runtime.activeRequests) throw new Error('有回答或长期记忆正在整理，请等它完成或停止后再管理记忆。'); };
   const redact = message => {
@@ -70,6 +73,7 @@ export async function createControlPanel({ root = projectRoot, port = 17860 } = 
         }
         catch (error) { settings.persist(old); settings.value = old; throw error; }
         if (patch.limits) memory.applyLimits();
+        if(patch.plugins)await runtime.plugins.sync();
         if (patch.groupChat || patch.prompts || patch.providers || patch.activePromptId || patch.activeProviderId) {
           runtime.groupService.cancelAll(); runtime.groups.prune(true);
           for (const row of profiles.db.prepare("SELECT id FROM profiles WHERE kind='group'").all()) runtime.learner.cancel(row.id);
@@ -87,12 +91,18 @@ export async function createControlPanel({ root = projectRoot, port = 17860 } = 
           memory: memory.stats(), storage: await storage.stats(), usage: runtime.counters,
           profiles: profiles.stats(), memoryLearning: {active:runtime.learner.activeRequests,queued:runtime.learner.queue.size},
           groups: runtime.groups.stats(),
+          plugins: runtime.plugins.list(),
           logs: runtime.logs.slice(-80), searchDocs: SEARCH_DOCS,
         }); return;
       }
       if (path === '/api/bot/start' && req.method === 'POST') { runtime.start(); json(res, { state: runtime.state }); return; }
       if (path === '/api/bot/stop' && req.method === 'POST') { await runtime.stop(); json(res, { state: runtime.state }); return; }
       if (path === '/api/test-chat' && req.method === 'POST') { const body = await jsonBody(req); json(res, await runtime.testChat(body.input)); return; }
+      if(path==='/api/plugins'||path.startsWith('/api/plugins/')){
+        const segments=path.slice('/api/plugins'.length).split('/').filter(Boolean).map(decodeURIComponent);
+        const body=['POST','PATCH','PUT','DELETE'].includes(req.method)?await jsonBody(req):undefined;
+        json(res,await runtime.plugins.api({method:req.method,segments,query:url.searchParams,body}));return;
+      }
       if (path === '/api/groups' && req.method === 'GET') { json(res, { rows: runtime.groups.list(), stats: runtime.groups.stats() }); return; }
       const groupMatch = path.match(/^\/api\/groups\/([^/]+)(?:\/(clear|summary|join))?$/);
       if (groupMatch) {
@@ -107,13 +117,10 @@ export async function createControlPanel({ root = projectRoot, port = 17860 } = 
         if (req.method === 'POST' && groupMatch[2] === 'summary') { await runtime.groupService.requestSummary(id); json(res, runtime.groups.detail(id)); return; }
         if (req.method === 'POST' && groupMatch[2] === 'join') { runtime.groups.channel(id); json(res, await runtime.groupService.requestParticipation(id)); return; }
       }
-      if (path === '/api/models' && req.method === 'POST') {
-        const body = await jsonBody(req); const provider = settings.value.providers.find(item => item.id === body.providerId);
-        if (!provider?.apiKey) throw new Error('请先保存该配置的 API Key。');
-        if(runtime.activeRequests>=settings.value.limits.maxConcurrent) throw new Error('请求较多，请稍后再试。');
-        const controller=new AbortController(); runtime.testControllers.add(controller); runtime.activeTests++;
-        try { const llm = new LLMClient({ ...provider, timeoutMs: 15000 },{signal:controller.signal}); json(res, { models: await llm.listModels() }); }
-        finally {runtime.activeTests--;runtime.testControllers.delete(controller);runtime.learner.pump();} return;
+      if (['/api/models', '/api/tool-check'].includes(path) && req.method === 'POST') {
+        const body = await jsonBody(req);
+        json(res, await runtime.checkProvider(body.providerId, path === '/api/models' ? 'models' : 'tools'));
+        return;
       }
       if(path==='/api/profiles' && req.method==='GET') {
         const page=Number(url.searchParams.get('page')||1); if(!Number.isInteger(page)||page<1||page>100000) throw new Error('页码错误。');
@@ -205,7 +212,7 @@ export async function createControlPanel({ root = projectRoot, port = 17860 } = 
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   createControlPanel().then(panel => {
-    console.log(`\nQQBot 本地控制台：${panel.origin}\n只接受本机访问。关闭网页后机器人可继续运行；退出程序请在界面操作或按 Ctrl+C。\n`);
+    console.log(`\nQoriBot 本地控制台：${panel.origin}\n只接受本机访问。关闭网页后机器人可继续运行；退出程序请在界面操作或按 Ctrl+C。\n`);
     for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { panel.close().then(() => process.exit(0)); });
   }).catch(error => { console.error(error.code === 'EADDRINUSE' ? '控制台已经运行，请打开 http://127.0.0.1:17860 。' : `控制台启动失败：${error.message}`); process.exitCode = 1; });
 }

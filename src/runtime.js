@@ -1,10 +1,12 @@
 import { createChatBot } from './bot.js';
 import { createLogger } from './logger.js';
 import { LLMClient } from './llm.js';
+import { checkToolSupport } from './llm/tool-check.js';
 import { ProfileMemory, LOCAL_USER, withUserMemory } from './profile-memory.js';
 import { MemoryLearner } from './memory-learner.js';
 import { GroupStore } from './group-store.js';
 import { GroupService } from './group-service.js';
+import { PluginManager } from './plugins/manager.js';
 
 export function connectionError(error) {
   let code;
@@ -43,9 +45,22 @@ export class BotRuntime {
       canRun: () => this.activeRequests < settings.value.limits.maxConcurrent, log: (level, text) => this.log(level, text), now,
       isConnected: () => this.state === 'running' && Boolean(this.bot) && !this.shutdown?.signal.aborted,
     }) : null;
-    this.log('info', '本地控制台已就绪。');
+    this.plugins=memory.db?new PluginManager({db:memory.db,settings,now,sendText:(target,text)=>this.sendPluginText(target,text),isConnected:()=>this.state==='running'&&Boolean(this.bot)&&!this.shutdown?.signal.aborted,log:(level,text)=>this.log(level,text)}):null;
+    if(this.groupService)this.groupService.plugins=this.plugins;
+    this.log('info', 'QoriBot 本地控制台已就绪。');
   }
-  get activeRequests() { return (this.chat?.busy.size || 0) + this.activeTests + (this.learner?.activeRequests || 0) + (this.groupService?.activeRequests || 0); }
+  get activeRequests() { return (this.chat?.busy.size || 0) + this.activeTests + (this.learner?.activeRequests || 0) + (this.groupService?.activeRequests || 0) + (this.plugins?.activeRequests||0); }
+  async sendPluginText(target,text) {
+    if(this.state!=='running'||!this.bot||this.shutdown?.signal.aborted)throw new Error('机器人尚未连接。');
+    const result=await this.bot.sendText(target,text),id=result?.id||result?.data?.id;
+    if(target.scope==='group'&&id){
+      this.groupService?.ownIds.set(id,this.now());
+      for(const [key,at] of this.groupService.ownIds)if(this.now()-at>600000)this.groupService.ownIds.delete(key);
+      while(this.groupService.ownIds.size>10000)this.groupService.ownIds.delete(this.groupService.ownIds.keys().next().value);
+      if(this.groupService?.policy(target.targetId).mode!=='light'&&this.groups?.discover(target.targetId))this.groups.append(target.targetId,{messageId:id,senderId:this.groupService.botId||'bot',content:text,at:this.now()},{direction:'out'});
+    }
+    return result;
+  }
   get retryAfterMs() { return Math.max(0,this.nextStartAt-this.now()); }
   log(level, message) {
     const secrets = [this.settings.value.qq.appSecret, ...this.settings.value.providers.map(provider => provider.apiKey)];
@@ -57,16 +72,44 @@ export class BotRuntime {
       for (const key of ['inputTokens', 'outputTokens', 'searches']) this.counters[key] += usage[key];
       if (usage.reported !== false) { usageSeen = true; total.inputTokens += usage.inputTokens; total.outputTokens += usage.outputTokens; } scope.onUsage?.(usage);
     } });
+    client.onFollowup=()=>{this.counters.requests++;};
     if (this.groups && !scope.managed) {
       const original = client.complete.bind(client);
-      client.complete = async messages => {
+      client.complete = async (messages,tools) => {
+        if(tools?.tools?.length)return original(messages,{...tools,beforeRequest:prompt=>{
+          const call=this.groups.reserve(scope.groupId||config.budgetGroup||'','plugin',prompt,config.llm.maxTokens);
+          return {finish:(usage,error)=>this.groups.settle(call,usage?.reported!==false?usage:null,error?'failed':'done')};
+        }});
         const call = this.groups.reserve(scope.groupId || config.budgetGroup || '', 'other', messages, config.llm.maxTokens);
-        try { const text = await original(messages); this.groups.settle(call, usageSeen ? total : null, 'done'); return text; }
+        try { const text = await original(messages,tools); this.groups.settle(call, usageSeen ? total : null, 'done'); return text; }
         catch (error) { this.groups.settle(call, usageSeen ? total : null, 'failed'); throw error; }
       };
     }
     return client;
   }
+  async checkProvider(providerId, kind) {
+    const provider = this.settings.value.providers.find(item => item.id === providerId);
+    if (!provider?.apiKey) throw new Error('请先保存该配置的 API Key。');
+    if (this.activeRequests >= this.settings.value.limits.maxConcurrent) throw new Error('请求较多，请稍后再试。');
+    const controller = new AbortController();
+    this.testControllers.add(controller);
+    this.activeTests++;
+    try {
+      if (kind === 'models') {
+        const client = new LLMClient({ ...provider, timeoutMs: 15000 }, { signal: controller.signal });
+        return { models: await client.listModels() };
+      }
+      this.counters.requests++;
+      const limits = this.settings.value.limits;
+      const client = this.client({ llm: { ...provider, webSearch: false, maxTokens: Math.min(limits.maxTokens, 512), timeoutMs: limits.timeoutMs, temperature: limits.temperature ?? undefined } }, controller.signal);
+      return await checkToolSupport(client);
+    } finally {
+      this.activeTests--;
+      this.testControllers.delete(controller);
+      this.learner?.pump();
+    }
+  }
+
   start() {
     if (['starting', 'running'].includes(this.state)) return;
     if (this.state === 'stopping') throw new Error('机器人正在停止，请稍后。');
@@ -84,9 +127,11 @@ export class BotRuntime {
       getLLM: (current, scope) => { this.counters.requests++; return this.client(current, shutdown.signal, scope); },
       profiles:this.profiles,learner:this.learner,getActiveRequests:()=>this.activeRequests,onIdle:()=>this.learner?.pump(),
       groups: this.groupService,
+      plugins: this.plugins,
     })); }
     catch(error) {this.state='error';this.lastError=connectionError(error);this.nextStartAt=this.now()+5000;this.shutdown=null;shutdown.abort();throw new Error(this.lastError);}
     this.bot = bot; this.chat = chat;
+    this.plugins?.start().catch(()=>this.log('warn','插件启动未完成，请查看控制台。'));
     clearInterval(this.groupPruneTimer);
     if(this.groups){this.groupPruneTimer=setInterval(()=>this.groups.prune(true),60000);this.groupPruneTimer.unref();}
     const watchdog=setTimeout(()=>{if(this.state==='starting'){this.state='error';this.lastError='QQ 连接超过 30 秒仍未完成，请检查网络、代理和平台权限。';this.nextStartAt=this.now()+5000;this.log('error',this.lastError);shutdown.abort();}},30000); watchdog.unref();
@@ -109,6 +154,7 @@ export class BotRuntime {
       if (!shutdown.signal.aborted) { this.state = 'error'; this.lastError=connectionError(error); this.nextStartAt=this.now()+5000; this.log('error', `启动失败：${this.lastError}`); }
     }).finally(async () => {
       clearTimeout(watchdog); shutdown.abort(); bot.stop(); await chat.drain();
+      await this.plugins?.stop();
       clearInterval(this.groupPruneTimer);
       bot.tokenManager.clearCache();
       for (const handlers of Object.values(bot.handlers || {})) handlers.clear();
@@ -117,10 +163,13 @@ export class BotRuntime {
     });
   }
   async stop() {
+    if(this.chat)this.chat.stopping=true;
+    const groupsStopping=this.groupService?.stop();
+    await this.plugins?.stop();
     clearInterval(this.groupPruneTimer);
     for (const controller of this.testControllers) controller.abort();
     await this.learner?.stop();
-    await this.groupService?.stop();
+    await groupsStopping;
     if (!this.bot) { this.state = 'stopped'; return; }
     this.state = 'stopping'; this.chat.stopping = true;
     this.shutdown.abort();
@@ -144,7 +193,7 @@ export class BotRuntime {
       try {profile=this.profiles?.notes(LOCAL_USER);}
       catch {this.log('warn','本机长期资料暂不可用，本次仅使用近期对话。请检查资料容量或本地文件。');}
       const context={...config.chat,maxContextChars:Math.max(0,config.chat.maxContextChars-(profile?.notes.length||0))};
-      const text=await this.client(config,controller.signal).complete(withUserMemory(this.memory.messages(key,input,context),profile?.notes));
+      const text=await this.client(config,controller.signal).complete(withUserMemory(this.memory.messages(key,input,context),profile?.notes),{tools:[],system:'当前是控制台本机测试，不是 QQ 私聊或群聊，没有绑定 QQ 发送目标。可以聊天和说明预约功能，但不能实际保存预约，也不能声称已预约或到时会发送；需要预约时请用户在 QQ 私聊或群聊中提出，或在控制台预约提醒页选择目标后手动新建。'});
       this.memory.commit(key,input,text,config.chat,{kind:'local',targetId:'local',senderId:'local-user',promptId:config.chat.promptId});
       if(profile) {
         try {this.learner?.observe(profile.id,input,config,this.memory.history(key).filter(item=>item.role==='user').map(item=>item.content));}

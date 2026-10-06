@@ -29,7 +29,7 @@ export function limitReply(text, maxBytes) {
 }
 
 export class ChatService {
-  constructor({ llm, config, send, logger, now = Date.now, sessions, getConfig, getLLM, profiles, learner, getActiveRequests, onIdle, groups }) {
+  constructor({ llm, config, send, logger, now = Date.now, sessions, getConfig, getLLM, profiles, learner, getActiveRequests, onIdle, groups, plugins }) {
     this.llm = llm;
     this.config = config;
     this.send = send;
@@ -40,6 +40,7 @@ export class ChatService {
     this.getLLM = getLLM;
     this.profiles = profiles; this.learner = learner; this.getActiveRequests = getActiveRequests; this.onIdle = onIdle;
     this.groups = groups;
+    this.plugins = plugins;
     if (groups) groups.commandHandler = message => this.handle(message, true);
     this.seen = new Map();
     this.busy = new Set();
@@ -82,6 +83,9 @@ export class ChatService {
   }
 
   async handle(message, skipGroup = false) {
+    if(!skipGroup&&this.plugins&&!this.stopping&&['c2c','group'].includes(message.kind)&&!message.senderIsBot&&!message.raw?.author?.bot&&message.replyTarget?.scope===message.kind&&message.replyTarget.targetId&&message.replyTarget.msgId===message.messageId&&message.senderId&&message.messageId){
+      this.plugins.targets.observe(message);
+    }
     if (!skipGroup && this.groups?.handle(message)) return;
     if (this.stopping || !['c2c', 'group'].includes(message.kind) || message.senderIsBot || message.raw?.author?.bot) return;
     if (message.kind === 'group' && message.rawEventType !== 'GROUP_AT_MESSAGE_CREATE') return;
@@ -99,7 +103,7 @@ export class ChatService {
     const key = sessionKey(message) + (config.chat.promptId ? `:${config.chat.promptId}` : '');
     const identity = userIdentity(message.kind,target.targetId,message.senderId);
     const command = input.toLowerCase();
-    if (['/help', '/帮助', '帮助'].includes(command)) { await this.reply(message, skipGroup ? HELP + '\n当前群已开启多人上下文。非 @消息由接话判断决定；/重置清空你在轻量模式下的个人近期对话，全群上下文请在本机群聊模式页清空。' : HELP); return; }
+    if (['/help', '/帮助', '帮助'].includes(command)) { const help=HELP+(this.plugins?.help()?'\n'+this.plugins.help():'');await this.reply(message, skipGroup ? help + '\n当前群已开启多人上下文。非 @消息由接话判断决定；/重置清空你在轻量模式下的个人近期对话，全群上下文请在本机群聊模式页清空。' : help); return; }
     if (['/model', '/模型'].includes(command)) { await this.reply(message, `当前模型：${config.llm.model}`); return; }
     if (this.busy.has(key)) { await this.reply(message, '上一条问题还在处理中，请等我回答后再发送。'); return; }
     if (this.profiles) {
@@ -135,7 +139,8 @@ export class ChatService {
         catch {this.logger.warn('用户长期资料暂不可用，本次仅使用近期对话。请检查资料容量或本地文件。');}
         const context = { ...config.chat, maxContextChars: Math.max(0,config.chat.maxContextChars-(profile?.notes.length||0)) };
         const llm = this.getLLM ? this.getLLM(config, { groupId: message.kind === 'group' ? target.targetId : '' }) : this.llm;
-        answer = await llm.complete(withUserMemory(this.sessions.messages(key,input,context),profile?.notes));
+        const tools=this.plugins?.toolSession(message,{canExecute:()=>!this.stopping&&this.now()-(Date.parse(message.timestamp)||this.now())<=(message.kind==='group'?240000:3300000)});
+        answer = await llm.complete(withUserMemory(this.sessions.messages(key,input,context),profile?.notes),tools);
       } catch (error) {
         const detail = error instanceof LLMError ? error.message : '大模型处理失败，请稍后再试。';
         this.logger.warn(detail);

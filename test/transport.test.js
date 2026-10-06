@@ -27,7 +27,7 @@ async function waitFor(condition) {
   }
 }
 
-async function platform(t) {
+async function platform(t, { rejectProactive = false } = {}) {
   const replies = [], requests = [], tokens = [], identifies = [];
   let baseUrl;
   let heldLLM;
@@ -46,10 +46,16 @@ async function platform(t) {
         if (heldLLM) await heldLLM;
         const system = body.messages?.[0]?.content || '';
         const payload = system.includes('判断群聊是否需要机器人接话') ? JSON.parse(body.messages.at(-1).content) : null;
+        const latest=body.messages?.at(-1),text=latest?.role==='user'?latest.content:'';
+        if(body.tools&&text.includes('10秒后提醒')){
+          const args={timeType:'relative',when:'10秒',content:text.includes('集合')?'集合':'喝水'};
+          res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({choices:[{message:{content:null,tool_calls:[{id:'call-reminder',type:'function',function:{name:'reminders_create',arguments:JSON.stringify(args)}}]}}],usage:{prompt_tokens:15,completion_tokens:5}}));return;
+        }
         const content = payload ? JSON.stringify({ action:'reply',targetMessageId:payload.candidates.at(-1),reason:'群成员求助' }) : `模拟回答${requests.length}`;
         data = { choices: [{ message: { content } }], usage:{prompt_tokens:20,completion_tokens:10} };
       } else if (/^\/v2\/(users|groups)\/[^/]+\/messages$/.test(req.url)) {
         replies.push({ url: req.url, body, auth: req.headers.authorization });
+        if(rejectProactive&&!body.msg_id){res.writeHead(400,{'content-type':'application/json'});res.end(JSON.stringify({code:40011033,message:'proactive push unavailable'}));return;}
         data = { id: `reply-${replies.length}`, timestamp: new Date().toISOString() };
       } else {
         res.writeHead(404); res.end('{}'); return;
@@ -109,7 +115,7 @@ function event(id, kind = 'c2c') {
 }
 
 for (const transport of ['websocket','webhook']) test(`${transport} 全能模式：官方普通事件合并多人上下文，判断与回复使用原消息ID，全量事件@直接回答`,{timeout:10000},async t=>{
-  const mock=await platform(t);mkdirSync(resolve(projectRoot,'.cache/test'),{recursive:true});const root=mkdtempSync(resolve(projectRoot,'.cache/test/full-'));
+  const mock=await platform(t,{rejectProactive:true});mkdirSync(resolve(projectRoot,'.cache/test'),{recursive:true});const root=mkdtempSync(resolve(projectRoot,'.cache/test/full-'));
   const saved=new SettingsStore(root);
   saved.update({providers:saved.public().providers.map(p=>p.id==='default'?{...p,baseUrl:mock.baseUrl+'/v1',apiKey:'fake-key'}:p),
     qq:{appId:'123',appSecret:'test-secret',baseUrl:mock.baseUrl,transport},limits:{autoMemory:false,cooldownMs:0},groupChat:{batchDelayMs:20,batchMaxWaitMs:100,groups:{'group-1':{mode:'active',cooldownMs:0,minJudgeIntervalMs:0}}}});
@@ -120,7 +126,8 @@ for (const transport of ['websocket','webhook']) test(`${transport} 全能模式
   // Webhook server 是运行时对象，单独注入 SDK，避免配置克隆它。
   if(adapter)delete saved.value.qq.webhook.server;
   const memory=new MemoryDatabase(resolve(root,'data/memory.sqlite'),()=>saved.value.limits);
-  const runtime=new BotRuntime(saved,memory,{botFactory:(config,options)=>{if(adapter){config.qq.webhook.port=0;config.qq.webhook.server=adapter;}return createChatBot(config,options);}});
+  let clock=Date.now();
+  const runtime=new BotRuntime(saved,memory,{now:()=>clock,botFactory:(config,options)=>{if(adapter){config.qq.webhook.port=0;config.qq.webhook.server=adapter;}return createChatBot(config,options);}});
   t.after(async()=>{await runtime.stop();memory.close();rmSync(root,{recursive:true,force:true});});
   runtime.start();await waitFor(()=>runtime.state==='running');if(transport==='websocket')assert.equal(runtime.groupService.botId,'123');
   const push=async payload=>{
@@ -142,6 +149,18 @@ for (const transport of ['websocket','webhook']) test(`${transport} 全能模式
   const joined=await runtime.groupService.requestParticipation('group-1');assert.equal(joined.sent,true);
   assert.equal(mock.replies.length,3);assert.equal(mock.replies[2].body.msg_id,'full-at');assert.equal(mock.requests.length,4);
   assert.equal(runtime.groups.usedToday('group-1'),120);
+  const groupReminder=event('reminder-group','group');groupReminder.d.content='<@!123> 10秒后提醒我集合';
+  const privateReminder=event('reminder-private');privateReminder.d.content='10秒后提醒我喝水';
+  await push(groupReminder);await push(privateReminder);await waitFor(()=>mock.replies.length===5);
+  assert.equal(mock.requests.length,8,'模型自主选择预约工具，并根据结果生成确认回复');
+  await waitFor(()=>!runtime.chat.pending.size);
+  clock+=11000;await runtime.plugins.entries.get('reminders').instance.tick();
+  assert.equal(mock.replies.length,7);
+  const reminders=mock.replies.slice(5);assert.ok(reminders.some(r=>r.url==='/v2/groups/group-1/messages'));assert.ok(reminders.some(r=>r.url==='/v2/users/private-user/messages'));
+  assert.ok(reminders.every(r=>r.body.msg_id&&r.body.content.includes('预约提醒')),'主动推送关闭时，到时通过 SDK 在有效窗口回复原目标');
+  assert.equal(reminders.find(r=>r.url.includes('/groups/')).body.msg_id,'reminder-group');
+  assert.equal(reminders.find(r=>r.url.includes('/users/')).body.msg_id,'reminder-private');
+  assert.equal(runtime.plugins.entries.get('reminders').instance.store.list({state:'completed'}).total,2);
 });
 
 test('WebSocket 端到端：鉴权、私聊、群 @、模型调用、被动回复和重复消息过滤', { timeout: 10000 }, async t => {

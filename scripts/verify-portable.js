@@ -16,7 +16,7 @@ function run(node, args, cwd) {
 }
 try {
   mkdirSync(root);
-  for (const path of ['runtime', 'node_modules', 'src', 'ui', 'scripts', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc']) cpSync(resolve(projectRoot, path), join(root, path), { recursive: true });
+  for (const path of ['runtime', 'node_modules', 'src', 'ui', 'plugins', 'scripts', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc']) cpSync(resolve(projectRoot, path), join(root, path), { recursive: true });
   const queue = [root];
   while (queue.length) for (const entry of readdirSync(queue.pop(), { withFileTypes: true })) {
     assert.equal(entry.isSymbolicLink(), false, '迁移副本不得依赖外部链接');
@@ -30,6 +30,8 @@ try {
       panel.memory.commit('portable-user: coding','测试问题','测试回答',panel.settings.value.limits,{senderId:'portable-user',promptId:'coding'});
       const {LOCAL_USER}=await import('./src/profile-memory.js');
       panel.profiles.edit(panel.profiles.ensure(LOCAL_USER),{notes:'- 迁移后仍使用中文'});
+      panel.runtime.plugins.targets.remember('group','portable-group','迁移测试群');
+      panel.runtime.plugins.entries.get('reminders').instance.create({timeType:'relative',when:'1天',content:'迁移后保留预约'},{scope:'group',targetId:'portable-group',creatorId:'portable-user',sourceId:'portable-reminder'});
     } finally { await panel.close(); }
   `], root);
   const moved = join(fixture, '迁移后的目录 with spaces');
@@ -46,11 +48,18 @@ try {
       assert.equal(settings.activePromptId,'coding');
       assert.equal(status.memory.sessions,1);
       assert.ok(html.includes('提示词工作室'));
+      assert.ok(html.includes('QoriBot') && html.includes('page-reminders'));
+      const reminders=await (await fetch(panel.origin+'/api/plugins/reminders/tasks')).json();
+      assert.equal(reminders.total,1);
+      assert.equal(reminders.rows[0].content,'迁移后保留预约');
+      assert.equal(reminders.rows[0].targetId,'portable-group');
+      assert.equal(reminders.rows[0].state,'active');
+      assert.equal((await fetch(panel.origin+'/plugins/reminders.js')).status,200);
       assert.equal(panel.memory.history('portable-user: coding')[1].content,'测试回答');
       const {LOCAL_USER}=await import('./src/profile-memory.js');
       assert.equal(panel.profiles.notes(LOCAL_USER).notes,'- 迁移后仍使用中文');
       assert.ok(panel.settings.path.startsWith(process.cwd()));
-      console.log('迁移后服务、配置、记忆和界面均正常。');
+      console.log('迁移后服务、配置、记忆、插件预约和界面均正常。');
     } finally { await panel.close(); }
   `], root);
   assert.match(run(node, [join(root, 'runtime/tools/pnpm/bin/pnpm.cjs'), '--version'], root), /11\.19\.0/);

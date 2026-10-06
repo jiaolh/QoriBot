@@ -65,6 +65,10 @@ export function validateSettings(value) {
   ]) finite(limits[key], name, min, max, integer);
   if (limits.temperature !== null) finite(limits.temperature, '温度', 0, 2, false);
   value.groupChat = validateGroupChat(value.groupChat || {}, value.providers, value.prompts);
+  if(value.plugins!==undefined&&(!value.plugins||typeof value.plugins!=='object'||Array.isArray(value.plugins)))throw new Error('插件配置格式错误。');
+  value.plugins = { reminders:{enabled:true}, ...value.plugins };
+  if(Object.keys(value.plugins).length>50)throw new Error('插件配置格式错误。');
+  for(const [id,config] of Object.entries(value.plugins))if(!/^[a-z][a-z0-9-]{0,40}$/.test(id)||!config||typeof config!=='object'||Array.isArray(config)||Object.keys(config).some(key=>key!=='enabled')||typeof config.enabled!=='boolean')throw new Error('插件开关格式错误。');
   return value;
 }
 
@@ -109,6 +113,10 @@ export class SettingsStore {
     }
     if (patch.limits) next.limits = { ...next.limits, ...patch.limits };
     if (patch.groupChat) next.groupChat = { ...next.groupChat, ...patch.groupChat };
+    if (patch.plugins !== undefined) {
+      if (!patch.plugins || typeof patch.plugins !== 'object' || Array.isArray(patch.plugins)) throw new Error('插件配置格式错误。');
+      next.plugins = { ...next.plugins, ...patch.plugins };
+    }
     if (patch.providers) {
       next.providers = patch.providers.map(provider => {
         const previous = next.providers.find(item => item.id === provider.id);

@@ -41,7 +41,7 @@ function required(env, name) {
 export function readConfig(env = process.env, { requireQQ = true, requireModel = true, requireLLM = true } = {}) {
   const transport = env.QQ_TRANSPORT?.trim().toLowerCase() || 'websocket';
   if (!['websocket', 'webhook'].includes(transport)) throw new Error('QQ_TRANSPORT 只能填写 websocket 或 webhook。');
-  const webhookPath = env.WEBHOOK_PATH?.trim() || '/qqbot/webhook';
+  const webhookPath = env.WEBHOOK_PATH?.trim() || '/qoribot/webhook';
   if (!/^\/[\w/.-]*$/.test(webhookPath)) throw new Error('WEBHOOK_PATH 应是以 / 开头的路径。');
   const temperature = env.LLM_TEMPERATURE?.trim();
   return {
