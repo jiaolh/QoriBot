@@ -7,6 +7,7 @@ import { MemoryLearner } from './memory-learner.js';
 import { GroupStore } from './group-store.js';
 import { GroupService } from './group-service.js';
 import { PluginManager } from './plugins/manager.js';
+import { PrivateStore } from './private-store.js';
 
 export function connectionError(error) {
   let code;
@@ -34,6 +35,7 @@ export class BotRuntime {
     this.output = output;
     this.groups = memory.db ? new GroupStore(memory, () => settings.value.groupChat, now) : null;
     this.profiles = memory.db ? new ProfileMemory(memory,()=>settings.value.limits) : null;
+    this.privateChats = memory.db ? new PrivateStore(memory, settings, now) : null;
     this.learner = this.profiles ? new MemoryLearner(this.profiles,{
       client:(config,signal)=>{this.counters.requests++;this.counters.memoryRequests++;return this.client(config,signal);},
       canRun:()=>this.activeRequests < settings.value.limits.maxConcurrent,
@@ -74,15 +76,26 @@ export class BotRuntime {
     } });
     client.onFollowup=()=>{this.counters.requests++;};
     if (this.groups && !scope.managed) {
+      const privateId = scope.privateId || config.budgetPrivate;
+      const reserve = (messages, kind = 'other') => {
+        if (privateId) this.privateChats.checkBudget(privateId, messages, config.llm.maxTokens);
+        const group = this.groups.reserve(scope.groupId || config.budgetGroup || '', kind, messages, config.llm.maxTokens);
+        const personal = privateId ? this.privateChats.reserve(privateId, messages, config.llm.maxTokens) : null;
+        return { group, personal };
+      };
+      const settle = (call, usage, state) => {
+        this.groups.settle(call.group, usage, state);
+        if (call.personal !== null) this.privateChats.settle(call.personal, usage, state);
+      };
       const original = client.complete.bind(client);
       client.complete = async (messages,tools) => {
         if(tools?.tools?.length)return original(messages,{...tools,beforeRequest:prompt=>{
-          const call=this.groups.reserve(scope.groupId||config.budgetGroup||'','plugin',prompt,config.llm.maxTokens);
-          return {finish:(usage,error)=>this.groups.settle(call,usage?.reported!==false?usage:null,error?'failed':'done')};
+          const call=reserve(prompt, 'plugin');
+          return {finish:(usage,error)=>settle(call,usage?.reported!==false?usage:null,error?'failed':'done')};
         }});
-        const call = this.groups.reserve(scope.groupId || config.budgetGroup || '', 'other', messages, config.llm.maxTokens);
-        try { const text = await original(messages,tools); this.groups.settle(call, usageSeen ? total : null, 'done'); return text; }
-        catch (error) { this.groups.settle(call, usageSeen ? total : null, 'failed'); throw error; }
+        const call = reserve(messages);
+        try { const text = await original(messages,tools); settle(call, usageSeen ? total : null, 'done'); return text; }
+        catch (error) { settle(call, usageSeen ? total : null, 'failed'); throw error; }
       };
     }
     return client;
@@ -123,11 +136,12 @@ export class BotRuntime {
     let bot,chat;
     try { ({ bot, chat } = this.botFactory(config, {
       logger, signal: shutdown.signal, sessions: this.memory,
-      getConfig: () => this.settings.runtime(),
+      getConfig: message => message?.kind === 'c2c' ? this.settings.privateRuntime(message.replyTarget.targetId) : this.settings.runtime(),
       getLLM: (current, scope) => { this.counters.requests++; return this.client(current, shutdown.signal, scope); },
       profiles:this.profiles,learner:this.learner,getActiveRequests:()=>this.activeRequests,onIdle:()=>this.learner?.pump(),
       groups: this.groupService,
       plugins: this.plugins,
+      privateChats: this.privateChats,
     })); }
     catch(error) {this.state='error';this.lastError=connectionError(error);this.nextStartAt=this.now()+5000;this.shutdown=null;shutdown.abort();throw new Error(this.lastError);}
     this.bot = bot; this.chat = chat;

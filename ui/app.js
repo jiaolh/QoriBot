@@ -5,7 +5,7 @@ let settings, status, promptId, providerId, detailId, currentPage = 'overview', 
 let toastTimer, searchTimer, pollTimer, disconnected = false, polling = false;
 let botActionPending=false,statusPending=null,renderedLogs='',renderedStorageAt=0,sessionSignature='';
 let toolCheckPending = false;
-const names = { overview: '运行概览', prompts: '提示词工作室', memory: '用户记忆', groups: '群聊模式', plugins: '插件管理', settings: 'API 与机器人', storage: '存储与环境' };
+const names = { overview: '运行概览', prompts: '提示词工作室', memory: '用户记忆', private: '个人模式', groups: '群聊模式', plugins: '插件管理', settings: 'API 与机器人', storage: '存储与环境' };
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 const bytes = value => value < 1024 ? `${value} B` : value < 1048576 ? `${(value / 1024).toFixed(1)} KB` : value < 1073741824 ? `${(value / 1048576).toFixed(1)} MB` : `${(value / 1073741824).toFixed(2)} GB`;
 const short = value => value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
@@ -37,6 +37,7 @@ function navigate(page) {
   document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.page === (pluginPage?'plugins':page)));
   if (page === 'memory') switchMemoryView(memoryView).catch(error => notify(error.message, true));
   if (page === 'groups') loadGroups(true).catch(error => notify(error.message, true));
+  if (page === 'private') loadPrivate(true).catch(error => notify(error.message, true));
   if(page==='plugins')loadPlugins().catch(error=>notify(error.message,true));
   window.QoriPluginUI?.pages.get(page)?.load().catch(error=>notify(error.message,true));
   window.scrollTo({ top: 0 });
@@ -261,7 +262,7 @@ async function poll() {
   if (disconnected) return;
   if (!document.hidden && !polling) {
     polling = true;
-    try { await refreshStatus(); if (currentPage === 'memory' && !$('memory-dialog').open && !$('profile-dialog').open) await switchMemoryView(memoryView); if(currentPage==='groups') await loadGroups(); if(currentPage==='plugins')await loadPlugins(); await window.QoriPluginUI?.pages.get(currentPage)?.poll?.(); }
+    try { await refreshStatus(); if (currentPage === 'memory' && !$('memory-dialog').open && !$('profile-dialog').open) await switchMemoryView(memoryView); if(currentPage==='groups') await loadGroups(); if(currentPage==='private') await loadPrivate(); if(currentPage==='plugins')await loadPlugins(); await window.QoriPluginUI?.pages.get(currentPage)?.poll?.(); }
     catch { $('bot-status').textContent = '服务未连接'; }
     finally { polling = false; }
   }

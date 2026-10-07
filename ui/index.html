@@ -5,7 +5,7 @@
   <meta name="local-token" content="__LOCAL_TOKEN__">
   <title>QoriBot · 本地控制台</title>
   <link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/style.css">
-  <script src="/app.js" defer></script><script src="/profiles.js" defer></script><script src="/groups.js" defer></script><script src="/plugins.js" defer></script>__PLUGIN_SCRIPTS__
+  <script src="/app.js" defer></script><script src="/profiles.js" defer></script><script src="/private.js" defer></script><script src="/groups.js" defer></script><script src="/plugins.js" defer></script>__PLUGIN_SCRIPTS__
 </head>
 <body>
   <aside class="sidebar">
@@ -15,6 +15,7 @@
       <button class="nav-item active" data-page="overview"><span class="nav-icon">◫</span>运行概览</button>
       <button class="nav-item" data-page="prompts"><span class="nav-icon">✧</span>提示词工作室</button>
       <button class="nav-item" data-page="memory"><span class="nav-icon">▦</span>用户记忆</button>
+      <button class="nav-item" data-page="private"><span class="nav-icon">♧</span>个人模式</button>
       <button class="nav-item" data-page="groups"><span class="nav-icon">☷</span>群聊模式</button>
       __PLUGIN_NAV__
       <button class="nav-item" data-page="plugins"><span class="nav-icon">◇</span>插件管理</button>
@@ -51,6 +52,43 @@
         <div class="memory-tabs"><button class="provider-tab active" id="view-profiles">长期资料</button><button class="provider-tab" id="view-sessions">近期对话</button><span class="muted" id="learning-status"></span></div>
         <div id="profile-panel"><div class="card memory-card"><div class="table-toolbar"><label class="search-box"><span>⌕</span><input id="profile-search" placeholder="搜索备注、用户标识或群标识" aria-label="搜索长期资料"></label><span class="muted" id="profile-count">0 位用户</span></div><div class="table-wrap"><table><thead><tr><th>用户 / 备注</th><th>场景</th><th>长期资料</th><th>内容大小</th><th>最近更新</th><th></th></tr></thead><tbody id="profile-rows"></tbody></table></div><div class="pagination"><button class="button secondary small" id="profile-prev">上一页</button><span id="profile-page">第 1 页</span><button class="button secondary small" id="profile-next">下一页</button></div></div><div class="info-box">长期资料不随对话过期而清空，切换提示词后仍可使用。可手动编辑，或发送“/记住 内容”。自动整理会增加少量 API 用量，可全局或逐用户关闭。</div></div>
         <div id="session-panel" class="hidden"><div class="card memory-card"><div class="table-toolbar"><label class="search-box"><span>⌕</span><input id="memory-search" placeholder="搜索备注、用户标识或群标识" aria-label="搜索记忆"></label><span class="muted" id="memory-count">0 条会话</span><button class="text-button danger" id="clear-memory">清空全部对话内容</button></div><div class="table-wrap"><table><thead><tr><th>用户 / 备注</th><th>场景与提示词</th><th>记忆轮数</th><th>内容大小</th><th>最近对话</th><th></th></tr></thead><tbody id="memory-rows"></tbody></table></div><div class="pagination"><button class="button secondary small" id="memory-prev">上一页</button><span id="memory-page">第 1 页</span><button class="button secondary small" id="memory-next">下一页</button></div></div><div class="info-box">QQ 标识不一定是 QQ 号。近期对话过期后清空正文；容量超过上限时移除最早的会话。此处清理不会删除长期用户资料。</div></div>
+      </section>
+      <section class="page" id="page-private">
+        <div class="page-heading"><div><div class="eyebrow">PERSONAL CONVERSATION</div><h1>每一位聊天伙伴，都有自己的设置。</h1><p>按私聊用户选择模型、提示词和回复规则，新的消息使用已保存的设置。</p></div><button class="button secondary" id="refresh-private">刷新私聊列表</button></div>
+        <article class="card">
+          <div class="card-top"><h2>私聊默认设置</h2><button class="text-button" data-page="settings">调整全局设置 ↗</button></div>
+          <p class="muted" id="private-defaults"></p>
+          <div class="info-box">未单独设置的用户跟随全局 API、提示词和发送间隔。近期对话、输入长度、并发与记忆容量使用“API 与机器人”中的全局限制。全部模型总预算在“群聊模式 → 群聊资源”中设置，也涵盖私聊与本机测试。</div>
+        </article>
+        <article class="card memory-card">
+          <div class="table-toolbar"><label class="search-box"><span>⌕</span><input id="private-search" placeholder="搜索备注或私聊用户标识" aria-label="搜索私聊用户"></label><span class="muted" id="private-stats"></span><button class="text-button" id="add-private">按用户标识添加</button></div>
+          <div class="table-wrap"><table><thead><tr><th>用户 / 回复</th><th>模型与提示词</th><th>近期对话</th><th>本小时回复</th><th>今日 tokens</th><th></th></tr></thead><tbody id="private-rows"></tbody></table></div>
+        </article>
+        <div id="private-detail" class="hidden">
+          <article class="card">
+            <div class="card-top"><h2 id="private-title">私聊设置</h2><button class="text-button" id="close-private">收起</button></div>
+            <form id="private-policy-form">
+              <div class="limits-grid">
+                <label>私聊用户标识<input id="private-id" maxlength="150" required></label>
+                <label>用户备注<input id="private-alias" maxlength="100"></label>
+                <label>回复状态<select id="private-enabled"><option value="true">开启 · 回复私聊消息</option><option value="false">关闭 · 保持安静</option></select></label>
+                <label>人格提示词<select id="private-prompt"></select></label>
+                <label>回复 API<select id="private-reply-api"></select></label>
+                <label>发送间隔（秒，留空跟随全局）<input id="private-cooldown" type="number" min="0" max="3600" step="0.001" placeholder="跟随全局"></label>
+                <label>每小时最多回复（0 不额外限制）<input id="private-replies" type="number" min="0" max="1000" step="1" required></label>
+                <label>每日 tokens（0 跟随总预算）<input id="private-budget" type="number" min="0" max="100000000" step="1" required></label>
+                <label>免打扰开始（北京时间）<input id="private-quiet-start" type="time"></label>
+                <label>免打扰结束（北京时间）<input id="private-quiet-end" type="time"></label>
+              </div>
+              <div class="form-bottom"><small>QQ 平台的私聊用户标识不一定是 QQ 号。关闭回复或免打扰期间，聊天与指令均保持安静；已保存预约按插件规则执行。</small><button class="button primary" type="submit">保存私聊设置</button></div>
+            </form>
+          </article>
+          <article class="card">
+            <div class="card-top"><h2>近期私聊对话</h2><div class="group-actions"><button class="text-button" id="private-profile" disabled>管理长期资料</button><button class="text-button danger" id="private-clear" disabled>清空近期对话</button></div></div>
+            <div id="private-messages" class="group-scroll"></div>
+            <small class="muted">按提示词分开保存，私聊与群聊相互独立。清空会移除这位用户所有提示词下的私聊正文，保留长期资料、记忆开关和已用预算。</small>
+          </article>
+        </div>
       </section>
       <section class="page" id="page-groups">
         <div class="page-heading"><div><div class="eyebrow">GROUP CONVERSATION</div><h1>在合适的时候，加入聊天。</h1><p id="group-retention-description">逐群选择轻量、观察或全能模式。</p></div><button class="button secondary" id="refresh-groups">刷新群列表</button></div>

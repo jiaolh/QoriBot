@@ -5,6 +5,7 @@ import { parseEnv } from 'node:util';
 import { projectRoot, readConfig } from './config.js';
 import { DEFAULT_PROMPT_PRESETS } from './prompts.js';
 import { validateGroupChat, groupPolicy } from './group-config.js';
+import { validatePrivateChat, privatePolicy } from './private-config.js';
 
 export const SEARCH_DOCS = 'https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code/#using-web-search-in-claude-code';
 export function supportsOfficialSearch(provider) {
@@ -65,6 +66,7 @@ export function validateSettings(value) {
   ]) finite(limits[key], name, min, max, integer);
   if (limits.temperature !== null) finite(limits.temperature, '温度', 0, 2, false);
   value.groupChat = validateGroupChat(value.groupChat || {}, value.providers, value.prompts);
+  value.privateChat = validatePrivateChat(value.privateChat === undefined ? {} : value.privateChat, value.providers, value.prompts);
   if(value.plugins!==undefined&&(!value.plugins||typeof value.plugins!=='object'||Array.isArray(value.plugins)))throw new Error('插件配置格式错误。');
   value.plugins = { reminders:{enabled:true}, ...value.plugins };
   if(Object.keys(value.plugins).length>50)throw new Error('插件配置格式错误。');
@@ -113,6 +115,7 @@ export class SettingsStore {
     }
     if (patch.limits) next.limits = { ...next.limits, ...patch.limits };
     if (patch.groupChat) next.groupChat = { ...next.groupChat, ...patch.groupChat };
+    if (patch.privateChat !== undefined) next.privateChat = structuredClone(patch.privateChat);
     if (patch.plugins !== undefined) {
       if (!patch.plugins || typeof patch.plugins !== 'object' || Array.isArray(patch.plugins)) throw new Error('插件配置格式错误。');
       next.plugins = { ...next.plugins, ...patch.plugins };
@@ -161,6 +164,17 @@ export class SettingsStore {
     return { qq: structuredClone(this.value.qq), groupChat: structuredClone(this.value.groupChat),
       llm: { ...provider, temperature: this.value.limits.temperature ?? undefined, maxTokens: this.value.limits.maxTokens, timeoutMs: this.value.limits.timeoutMs },
       chat: { ...this.value.limits, systemPrompt: prompt.content, promptId: prompt.id }, budgetGroup: id };
+  }
+
+  privateRuntime(id) {
+    const value = this.value, policy = privatePolicy(value.privateChat, id);
+    const provider = value.providers.find(p => p.id === (policy.replyProviderId || value.activeProviderId));
+    if (!provider?.apiKey) throw new Error('这位私聊用户选择的模型尚未填写 API Key。');
+    const prompt = value.prompts.find(p => p.id === (policy.promptId || value.activePromptId));
+    return { qq: structuredClone(value.qq),
+      llm: { ...provider, temperature: value.limits.temperature ?? undefined, maxTokens: value.limits.maxTokens, timeoutMs: value.limits.timeoutMs },
+      chat: { ...value.limits, cooldownMs: policy.cooldownMs ?? value.limits.cooldownMs, systemPrompt: prompt.content, promptId: prompt.id },
+      budgetPrivate: id };
   }
 }
 

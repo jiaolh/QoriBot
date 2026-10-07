@@ -9,6 +9,7 @@ import { MemoryDatabase } from './memory-db.js';
 import { BotRuntime } from './runtime.js';
 import { ProjectStorage, contained } from './storage.js';
 import { LOCAL_USER } from './profile-memory.js';
+import { validPrivateId } from './private-config.js';
 
 async function jsonBody(req) {
   if (!(req.headers['content-type'] || '').startsWith('application/json')) throw new Error('请求需要 JSON 格式。');
@@ -33,6 +34,7 @@ export async function createControlPanel({ root = projectRoot, port = 17860 } = 
     ['/app.js', { type: 'text/javascript; charset=utf-8', content: readFileSync(resolve(projectRoot, 'ui/app.js')) }],
     ['/profiles.js', { type: 'text/javascript; charset=utf-8', content: readFileSync(resolve(projectRoot,'ui/profiles.js')) }],
     ['/groups.js', { type: 'text/javascript; charset=utf-8', content: readFileSync(resolve(projectRoot,'ui/groups.js')) }],
+    ['/private.js', { type: 'text/javascript; charset=utf-8', content: readFileSync(resolve(projectRoot,'ui/private.js')) }],
     ['/plugins.js', { type: 'text/javascript; charset=utf-8', content: readFileSync(resolve(projectRoot,'ui/plugins.js')) }],
     ['/favicon.svg', { type: 'image/svg+xml', content: readFileSync(resolve(projectRoot, 'ui/favicon.svg')) }],
   ]);
@@ -65,7 +67,7 @@ export async function createControlPanel({ root = projectRoot, port = 17860 } = 
       if (path === '/api/settings' && req.method === 'PUT') {
         const patch = await jsonBody(req);
         if (patch.qq && runtime.bot) throw new Error('修改 QQ 接入配置前请先停止机器人。');
-        if (patch.limits) assertIdle();
+        if (patch.limits || patch.privateChat) assertIdle();
         const old = structuredClone(settings.value);
         try {
           settings.update(patch); if (runtime.bot) settings.runtime();
@@ -77,6 +79,9 @@ export async function createControlPanel({ root = projectRoot, port = 17860 } = 
         if (patch.groupChat || patch.prompts || patch.providers || patch.activePromptId || patch.activeProviderId) {
           runtime.groupService.cancelAll(); runtime.groups.prune(true);
           for (const row of profiles.db.prepare("SELECT id FROM profiles WHERE kind='group'").all()) runtime.learner.cancel(row.id);
+        }
+        if (patch.privateChat || patch.prompts || patch.providers || patch.activePromptId || patch.activeProviderId) {
+          for (const row of profiles.db.prepare("SELECT id FROM profiles WHERE kind='c2c'").all()) runtime.learner.cancel(row.id);
         }
         runtime.log('info', '配置已保存，新的模型请求将使用当前 API 和提示词。');
         json(res, settings.public()); return;
@@ -91,6 +96,7 @@ export async function createControlPanel({ root = projectRoot, port = 17860 } = 
           memory: memory.stats(), storage: await storage.stats(), usage: runtime.counters,
           profiles: profiles.stats(), memoryLearning: {active:runtime.learner.activeRequests,queued:runtime.learner.queue.size},
           groups: runtime.groups.stats(),
+          privateChats: runtime.privateChats.stats(),
           plugins: runtime.plugins.list(),
           logs: runtime.logs.slice(-80), searchDocs: SEARCH_DOCS,
         }); return;
@@ -104,6 +110,18 @@ export async function createControlPanel({ root = projectRoot, port = 17860 } = 
         json(res,await runtime.plugins.api({method:req.method,segments,query:url.searchParams,body}));return;
       }
       if (path === '/api/groups' && req.method === 'GET') { json(res, { rows: runtime.groups.list(), stats: runtime.groups.stats() }); return; }
+      if (path === '/api/private' && req.method === 'GET') { json(res, { rows: runtime.privateChats.list(url.searchParams.get('q') || ''), todayTokens: runtime.privateChats.usedToday() }); return; }
+      const privateMatch = path.match(/^\/api\/private\/([^/]+)(?:\/(clear))?$/);
+      if (privateMatch) {
+        const id = decodeURIComponent(privateMatch[1]);
+        if (!validPrivateId(id)) throw new Error('私聊用户标识格式错误。');
+        if (req.method === 'GET' && !privateMatch[2]) { json(res, runtime.privateChats.detail(id)); return; }
+        if (req.method === 'POST' && privateMatch[2] === 'clear') {
+          assertIdle();
+          for (const row of profiles.db.prepare("SELECT id FROM profiles WHERE kind='c2c' AND target_id=?").all(id)) runtime.learner.cancel(row.id);
+          json(res, { cleared: runtime.privateChats.clear(id) }); return;
+        }
+      }
       const groupMatch = path.match(/^\/api\/groups\/([^/]+)(?:\/(clear|summary|join))?$/);
       if (groupMatch) {
         const id = decodeURIComponent(groupMatch[1]);
@@ -137,7 +155,7 @@ export async function createControlPanel({ root = projectRoot, port = 17860 } = 
             .flatMap(s=>JSON.parse(s.messages).filter(m=>m.role==='user').slice(row.forgottenBefore?-1:-10).map(m=>({text:m.content,at:s.at})));
         }
         if (!messages.length) throw new Error('没有尚未过期、且晚于清空或手动修改的用户陈述');
-        runtime.learner.resume(); runtime.learner.observe(row.id,messages.at(-1).text,row.kind==='group'?settings.groupRuntime(row.targetId):settings.runtime({requireQQ:false}),messages,{force:true});
+        runtime.learner.resume(); runtime.learner.observe(row.id,messages.at(-1).text,row.kind==='group'?settings.groupRuntime(row.targetId):row.kind==='c2c'?settings.privateRuntime(row.targetId):settings.runtime({requireQQ:false}),messages,{force:true});
         json(res,{ok:true});return;
       }
       const profileMatch=path.match(/^\/api\/profiles\/([a-f0-9]{24})(\/export)?$/);

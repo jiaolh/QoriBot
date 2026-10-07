@@ -67,7 +67,7 @@ export class TargetCatalog {
   }
 
   decorate(row) {
-    const label = (row.scope === 'group' ? this.settings.value.groupChat.groups[row.targetId]?.alias : '') || row.label;
+    const label = (row.scope === 'group' ? this.settings.value.groupChat.groups[row.targetId]?.alias : this.settings.value.privateChat?.users[row.targetId]?.alias) || row.label;
     const short = row.targetId.length > 18 ? row.targetId.slice(0, 8) + '…' + row.targetId.slice(-6) : row.targetId;
     return { ...row, label: label || `${row.scope === 'group' ? '群聊' : '私聊'} ${short}` };
   }
